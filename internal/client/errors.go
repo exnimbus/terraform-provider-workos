@@ -41,10 +41,10 @@ type ValidationError struct {
 func (e *APIError) Error() string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("WorkOS API error (HTTP %d)", e.StatusCode))
+	fmt.Fprintf(&sb, "WorkOS API error (HTTP %d)", e.StatusCode)
 
 	if e.Code != "" {
-		sb.WriteString(fmt.Sprintf(" [%s]", e.Code))
+		fmt.Fprintf(&sb, " [%s]", e.Code)
 	}
 
 	if e.Message != "" {
@@ -55,12 +55,12 @@ func (e *APIError) Error() string {
 	if len(e.Errors) > 0 {
 		sb.WriteString("\nValidation errors:")
 		for _, ve := range e.Errors {
-			sb.WriteString(fmt.Sprintf("\n  - %s", ve.Field))
+			fmt.Fprintf(&sb, "\n  - %s", ve.Field)
 			if ve.Code != "" {
-				sb.WriteString(fmt.Sprintf(" [%s]", ve.Code))
+				fmt.Fprintf(&sb, " [%s]", ve.Code)
 			}
 			if ve.Message != "" {
-				sb.WriteString(fmt.Sprintf(": %s", ve.Message))
+				fmt.Fprintf(&sb, ": %s", ve.Message)
 			}
 		}
 	}
