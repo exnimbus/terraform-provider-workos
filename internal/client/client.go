@@ -39,6 +39,7 @@ type Client struct {
 	apiKey     string
 	clientID   string
 	baseURL    string
+	management *ManagementClient
 }
 
 // NewClient creates a new WorkOS API client
@@ -59,6 +60,28 @@ func NewClient(apiKey, clientID, baseURL string) (*Client, error) {
 		clientID: clientID,
 		baseURL:  baseURL,
 	}, nil
+}
+
+// NewProviderClient creates the shared provider client. An API key is optional
+// when only Management MCP-backed resources are used.
+func NewProviderClient(apiKey, clientID, baseURL string, management *ManagementClient) *Client {
+	if baseURL == "" {
+		baseURL = DefaultBaseURL
+	}
+	return &Client{
+		httpClient: &http.Client{Timeout: DefaultTimeout},
+		apiKey:     apiKey,
+		clientID:   clientID,
+		baseURL:    baseURL,
+		management: management,
+	}
+}
+
+func (c *Client) Management() (*ManagementClient, error) {
+	if c.management == nil {
+		return nil, ErrMCPNotLoggedIn
+	}
+	return c.management, nil
 }
 
 // doRequest performs an HTTP request with automatic retry on rate limiting

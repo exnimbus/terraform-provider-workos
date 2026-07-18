@@ -1,8 +1,8 @@
 terraform {
   required_providers {
     workos = {
-      source  = "osodevops/workos"
-      version = "~> 1.0"
+      source  = "exnimbus/workos"
+      version = "~> 2.5"
     }
   }
 }

@@ -9,10 +9,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/exnimbus/terraform-provider-workos/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/osodevops/terraform-provider-workos/internal/client"
 )
 
 func TestEnvironmentRoleDataSource_BySlug(t *testing.T) {

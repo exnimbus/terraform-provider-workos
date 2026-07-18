@@ -25,10 +25,10 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
-          terraform_wrapper: false
+          tofu_wrapper: false
 
       - name: Import GPG key
         uses: crazy-max/ghaction-import-gpg@v6

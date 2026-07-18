@@ -8,9 +8,9 @@ import (
 	"sort"
 	"time"
 
+	"github.com/exnimbus/terraform-provider-workos/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/osodevops/terraform-provider-workos/internal/client"
 )
 
 func environmentRolePermissionsSet(ctx context.Context, permissions []string) (types.Set, diag.Diagnostics) {

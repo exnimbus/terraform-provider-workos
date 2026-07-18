@@ -6,43 +6,56 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
+	"os"
 
+	"github.com/exnimbus/terraform-provider-workos/internal/client"
+	"github.com/exnimbus/terraform-provider-workos/internal/provider"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
-	"github.com/osodevops/terraform-provider-workos/internal/provider"
 )
 
 // Run "go generate" to format example terraform files and generate the docs for the registry/website
 
 // If you do not have terraform installed, you can remove the formatting command, but its suggested to
 // ensure the documentation is formatted properly.
-//go:generate terraform fmt -recursive ./examples/
+//go:generate tofu fmt -recursive ./examples/
 
-// Run the docs generation tool, check its repository for more information on how it works and how docs
-// can be customized.
-//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate -provider-name workos
+// Generate registry docs from an OpenTofu-exported provider schema.
+//go:generate sh scripts/generate-docs.sh
 
 var (
 	// these will be set by the goreleaser configuration
 	// to appropriate values for the compiled binary.
 	version string = "dev"
-
-	// goreleaser can pass other information to the main package, such as the specific commit
-	// https://goreleaser.com/cookbooks/using-main.version/
 )
 
 func main() {
+	if len(os.Args) == 2 {
+		var err error
+		switch os.Args[1] {
+		case "login":
+			err = client.MCPLogin(context.Background(), os.Stdout)
+		case "status":
+			err = client.MCPStatus(context.Background(), os.Stdout)
+		case "logout":
+			err = client.MCPLogout(os.Stdout)
+		default:
+			err = fmt.Errorf("unknown command %q; expected login, status, or logout", os.Args[1])
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	var debug bool
 
 	flag.BoolVar(&debug, "debug", false, "set to true to run the provider with support for debuggers like delve")
 	flag.Parse()
 
 	opts := providerserver.ServeOpts{
-		// NOTE: This is not a typical Terraform Registry provider address,
-		// such as registry.terraform.io/hashicorp/workos. This specific
-		// provider address is used in acceptance testing and target the
-		// development provider binary.
-		Address: "registry.terraform.io/osodevops/workos",
+		// This address is also used by OpenTofu development overrides.
+		Address: "registry.opentofu.org/exnimbus/workos",
 		Debug:   debug,
 	}
 

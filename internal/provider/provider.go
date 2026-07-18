@@ -5,8 +5,10 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"os"
 
+	"github.com/exnimbus/terraform-provider-workos/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -14,7 +16,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/osodevops/terraform-provider-workos/internal/client"
 )
 
 // Ensure WorkOSProvider satisfies various provider interfaces.
@@ -43,17 +44,17 @@ func (p *WorkOSProvider) Metadata(ctx context.Context, req provider.MetadataRequ
 func (p *WorkOSProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description: "The WorkOS provider allows you to manage WorkOS resources including organizations, " +
-			"users, organization memberships, and roles through Terraform.",
+			"users, organization memberships, roles, and AuthKit through OpenTofu.",
 		MarkdownDescription: `
-The WorkOS provider allows you to manage WorkOS resources through Terraform.
+The WorkOS provider allows you to manage WorkOS resources through OpenTofu.
 
 ## Authentication
 
-The provider requires a WorkOS API key for authentication. You can provide this in three ways:
+REST-backed resources require a WorkOS API key. The AuthKit configuration resource uses
+the official WorkOS Management MCP with OAuth credentials stored in the OS keychain.
 
-1. Set the ` + "`api_key`" + ` attribute in the provider configuration
-2. Set the ` + "`WORKOS_API_KEY`" + ` environment variable
-3. Use a combination of both (attribute takes precedence)
+Run ` + "`terraform-provider-workos login`" + ` for interactive device authentication,
+or set ` + "`WORKOS_MCP_CLIENT_ID`" + ` and ` + "`WORKOS_MCP_REFRESH_TOKEN`" + ` together in CI.
 
 ## Example Usage
 
@@ -124,21 +125,6 @@ func (p *WorkOSProvider) Configure(ctx context.Context, req provider.ConfigureRe
 		baseURL = config.BaseURL.ValueString()
 	}
 
-	// If API key is not configured, return an error
-	if apiKey == "" {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("api_key"),
-			"Missing WorkOS API Key",
-			"The provider cannot create the WorkOS API client as there is a missing or empty value for the WorkOS API key. "+
-				"Set the api_key value in the configuration or use the WORKOS_API_KEY environment variable. "+
-				"If either is already set, ensure the value is not empty.",
-		)
-	}
-
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
 	// Default base URL if not set
 	if baseURL == "" {
 		baseURL = "https://api.workos.com"
@@ -150,17 +136,20 @@ func (p *WorkOSProvider) Configure(ctx context.Context, req provider.ConfigureRe
 
 	tflog.Debug(ctx, "Creating WorkOS client")
 
-	// Create a new WorkOS client using the configuration values
-	workosClient, err := client.NewClient(apiKey, clientID, baseURL)
-	if err != nil {
+	management, mcpErr := client.NewManagementClient(ctx)
+	if mcpErr != nil && !errors.Is(mcpErr, client.ErrMCPNotLoggedIn) {
 		resp.Diagnostics.AddError(
-			"Unable to Create WorkOS API Client",
-			"An unexpected error occurred when creating the WorkOS API client. "+
-				"If the error is not clear, please contact the provider developers.\n\n"+
-				"WorkOS Client Error: "+err.Error(),
+			"Unable to Load WorkOS Management MCP Credentials",
+			mcpErr.Error(),
 		)
 		return
 	}
+	if apiKey == "" && management == nil {
+		resp.Diagnostics.AddAttributeError(path.Root("api_key"), "Missing WorkOS Authentication", "Set a WorkOS API key for REST resources, or run `terraform-provider-workos login` for the MCP-backed AuthKit resource.")
+		return
+	}
+
+	workosClient := client.NewProviderClient(apiKey, clientID, baseURL, management)
 
 	// Make the WorkOS client available during DataSource and Resource
 	// type Configure methods.
@@ -185,6 +174,9 @@ func (p *WorkOSProvider) Resources(ctx context.Context) []func() resource.Resour
 		NewOrganizationRolePermissionResource,
 		NewAuthorizationResourceResource,
 		NewAuthorizationRoleAssignmentResource,
+		NewRedirectURIResource,
+		NewCORSOriginResource,
+		NewAuthKitConfigurationResource,
 	}
 }
 

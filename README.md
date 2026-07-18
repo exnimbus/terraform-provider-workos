@@ -1,36 +1,34 @@
-# WorkOS Terraform Provider
+# WorkOS OpenTofu Provider
 
-Terraform provider for managing [WorkOS](https://workos.com) resources including organizations, users, organization memberships, roles, and permissions.
+OpenTofu provider for managing [WorkOS](https://workos.com), including an environment-scoped AuthKit configuration resource backed by the official WorkOS Management MCP.
 
 ## Requirements
 
-- [Terraform](https://www.terraform.io/downloads.html) >= 1.0
-- [Go](https://golang.org/doc/install) >= 1.21 (for development)
+- [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.8
+- [Go](https://go.dev/doc/install) >= 1.25 (for development)
 
 ## Installation
 
-### From Terraform Registry (Recommended)
+### From OpenTofu Registry
 
 ```hcl
 terraform {
   required_providers {
     workos = {
-      source  = "osodevops/workos"
-      version = "~> 1.0"
+      source  = "exnimbus/workos"
+      version = "~> 2.5"
     }
   }
 }
 
-provider "workos" {
-  api_key = var.workos_api_key
-}
+provider "workos" {}
 ```
 
 ### Local Development
 
 ```bash
 # Clone the repository
-git clone https://github.com/osodevops/terraform-provider-workos.git
+git clone https://github.com/exnimbus/terraform-provider-workos.git
 cd terraform-provider-workos
 
 # Build the provider
@@ -51,6 +49,18 @@ provider "workos" {
   base_url  = "https://api.workos.com" # Optional, defaults to production API
 }
 ```
+
+REST-backed resources use `WORKOS_API_KEY`. The AuthKit configuration resource uses OAuth device authentication:
+
+```bash
+terraform-provider-workos login
+terraform-provider-workos status
+terraform-provider-workos logout
+```
+
+The refresh credential is stored under a dedicated OS-keychain entry. In CI, set `WORKOS_MCP_CLIENT_ID` and `WORKOS_MCP_REFRESH_TOKEN` together; neither value belongs in OpenTofu configuration or state.
+
+See [SOURCES.md](SOURCES.md) for pinned upstream provenance.
 
 ### Managing Organizations
 
@@ -220,6 +230,9 @@ OpenTofu uses the same import IDs with `tofu import`.
 | `workos_organization_role` | Manages organization authorization roles |
 | `workos_permission` | Manages environment-level permissions |
 | `workos_organization_role_permission` | Assigns a permission to an organization role |
+| `workos_redirect_uri` | Manages one AuthKit redirect URI through the public REST API |
+| `workos_cors_origin` | Manages one AuthKit CORS origin through the public REST API |
+| `workos_authkit_configuration` | Manages the complete default AuthKit application and authentication policy through Management MCP |
 
 ## Data Sources
 
@@ -290,6 +303,6 @@ MPL-2.0 - See [LICENSE](LICENSE) for details.
 
 ## Support
 
-- [Documentation](https://registry.terraform.io/providers/osodevops/workos/latest/docs)
-- [GitHub Issues](https://github.com/osodevops/terraform-provider-workos/issues)
+- [Documentation](https://search.opentofu.org/provider/exnimbus/workos)
+- [GitHub Issues](https://github.com/exnimbus/terraform-provider-workos/issues)
 - [WorkOS Documentation](https://workos.com/docs)

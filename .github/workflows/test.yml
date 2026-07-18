@@ -5,6 +5,12 @@ name: Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      acceptance:
+        description: 'Run mutating WorkOS acceptance tests'
+        required: false
+        type: boolean
+        default: false
   pull_request:
     branches:
       - main
@@ -50,10 +56,9 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
-          terraform_version: '1.6.*'
-          terraform_wrapper: false
+          tofu_wrapper: false
 
       - name: Generate Documentation
         run: go generate ./...
@@ -71,8 +76,8 @@ jobs:
       fail-fast: false
       matrix:
         go-version:
-          - '1.21'
-          - '1.22'
+          - '1.25'
+          - '1.26'
     steps:
       - uses: actions/checkout@v4
 
@@ -106,12 +111,12 @@ jobs:
         with:
           version: latest
 
-  # Acceptance tests run on push to main only (requires secrets)
+  # Acceptance tests are explicit because they mutate WorkOS.
   acceptance:
     name: Acceptance Tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.acceptance
     needs:
       - build
       - test
@@ -123,14 +128,13 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
-          terraform_version: '1.6.*'
-          terraform_wrapper: false
+          tofu_wrapper: false
+          provider_acceptance_tests: true
 
       - name: Run Acceptance Tests
         run: go test -v -cover -timeout=20m -parallel=4 ./...
         env:
-          TF_ACC: '1'
           WORKOS_API_KEY: ${{ secrets.WORKOS_API_KEY }}
           WORKOS_CLIENT_ID: ${{ secrets.WORKOS_CLIENT_ID }}

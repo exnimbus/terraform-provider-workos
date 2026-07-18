@@ -9,8 +9,8 @@ build:
 
 # Install the provider locally for development
 install: build
-	mkdir -p ~/.terraform.d/plugins/registry.terraform.io/osodevops/workos/0.0.1/darwin_arm64
-	mv terraform-provider-workos ~/.terraform.d/plugins/registry.terraform.io/osodevops/workos/0.0.1/darwin_arm64/
+	mkdir -p ~/.terraform.d/plugins/registry.opentofu.org/exnimbus/workos/0.0.1/darwin_arm64
+	mv terraform-provider-workos ~/.terraform.d/plugins/registry.opentofu.org/exnimbus/workos/0.0.1/darwin_arm64/
 
 # Run unit tests
 test:
@@ -27,7 +27,7 @@ testacc-one:
 # Format code
 fmt:
 	go fmt ./...
-	terraform fmt -recursive ./examples/
+	tofu fmt -recursive ./examples/
 
 # Run linter
 lint:
