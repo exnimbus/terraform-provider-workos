@@ -4,7 +4,7 @@
 
 - Push the reviewed source to `github.com/exnimbus/terraform-provider-workos`.
 - Add `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` GitHub Actions secrets for the release key.
-- Submit that key through the OpenTofu Registry's **new provider signing key** issue form.
+- Submit [`gpg-public-key.asc`](../gpg-public-key.asc), fingerprint `44100B8EA509D7A831880A1101447776A5455567`, through the OpenTofu Registry's **new provider signing key** issue form.
 - Keep `terraform-registry-manifest.json` in every release checksum set.
 
 ## Release v2.5.0
