@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,6 +28,7 @@ const (
 	mcpKeychainService = "exnimbus.terraform-provider-workos.mcp"
 	mcpClientIDAccount = "client_id"
 	mcpRefreshAccount  = "refresh_token"
+	mcpAccessAccount   = "access_token"
 	mcpIssuer          = "https://signin.workos.com"
 	mcpDeviceGrant     = "urn:ietf:params:oauth:grant-type:device_code"
 )
@@ -39,6 +41,7 @@ var secretPatterns = []*regexp.Regexp{
 
 type mcpCredentials struct {
 	ClientID     string
+	AccessToken  string
 	RefreshToken string
 }
 
@@ -56,23 +59,29 @@ func loadMCPCredentials() (mcpCredentials, bool, error) {
 	}
 
 	clientID, clientErr := keyring.Get(mcpKeychainService, mcpClientIDAccount)
+	accessToken, _ := keyring.Get(mcpKeychainService, mcpAccessAccount)
 	refreshToken, refreshErr := keyring.Get(mcpKeychainService, mcpRefreshAccount)
-	if errors.Is(clientErr, keyring.ErrNotFound) && errors.Is(refreshErr, keyring.ErrNotFound) {
+	if errors.Is(clientErr, keyring.ErrNotFound) && errors.Is(refreshErr, keyring.ErrNotFound) && accessToken == "" {
 		return mcpCredentials{}, false, ErrMCPNotLoggedIn
 	}
-	if clientErr != nil || refreshErr != nil {
+	if clientErr != nil || (refreshErr != nil && accessToken == "") {
 		return mcpCredentials{}, false, fmt.Errorf("read WorkOS MCP credentials from OS keychain: %w", errors.Join(clientErr, refreshErr))
 	}
-	return mcpCredentials{ClientID: clientID, RefreshToken: refreshToken}, true, nil
+	return mcpCredentials{ClientID: clientID, AccessToken: accessToken, RefreshToken: refreshToken}, true, nil
 }
 
 func newOAuthHTTPClient(ctx context.Context, credentials mcpCredentials, persist bool) (*oauthHTTPClient, error) {
-	if credentials.ClientID == "" || credentials.RefreshToken == "" {
+	if credentials.ClientID == "" || (credentials.RefreshToken == "" && credentials.AccessToken == "") {
 		return nil, ErrMCPNotLoggedIn
+	}
+	if credentials.AccessToken != "" {
+		httpClient := oauth2.NewClient(ctx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: credentials.AccessToken, TokenType: "Bearer"}))
+		httpClient.Timeout = DefaultTimeout
+		return &oauthHTTPClient{Client: httpClient}, nil
 	}
 	config := &oauth2.Config{
 		ClientID: credentials.ClientID,
-		Endpoint: oauth2.Endpoint{TokenURL: mcpIssuer + "/oauth2/token", AuthStyle: oauth2.AuthStyleInParams},
+		Endpoint: oauth2.Endpoint{TokenURL: mcpIssuer + "/oauth2/token?resource=" + url.QueryEscape(ManagementMCPEndpoint), AuthStyle: oauth2.AuthStyleInParams},
 		Scopes:   []string{"openid", "profile", "email", "offline_access"},
 	}
 	source := config.TokenSource(ctx, &oauth2.Token{RefreshToken: credentials.RefreshToken})
@@ -92,15 +101,16 @@ type persistingTokenSource struct {
 
 func (s *persistingTokenSource) Token() (*oauth2.Token, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	previousRefreshToken := s.previousRefreshToken
-	s.mu.Unlock()
 	token, err := s.source.Token()
 	if err != nil {
 		return nil, errors.New(redactKnown(err.Error(), previousRefreshToken))
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if token.RefreshToken != "" && token.RefreshToken != s.previousRefreshToken {
+	if token.RefreshToken == "" {
+		token.RefreshToken = previousRefreshToken
+	}
+	if token.RefreshToken != previousRefreshToken {
 		if err := keyring.Set(mcpKeychainService, mcpRefreshAccount, token.RefreshToken); err != nil {
 			return nil, fmt.Errorf("store refreshed WorkOS MCP credential in OS keychain: %w", err)
 		}
@@ -110,25 +120,30 @@ func (s *persistingTokenSource) Token() (*oauth2.Token, error) {
 }
 
 type oauthEndpoints struct {
-	Register string
-	Device   string
-	Token    string
+	Register  string
+	Device    string
+	Token     string
+	Authorize string
 }
 
 var workOSEndpoints = oauthEndpoints{
-	Register: mcpIssuer + "/oauth2/register",
-	Device:   mcpIssuer + "/oauth2/device_authorization",
-	Token:    mcpIssuer + "/oauth2/token",
+	Register:  mcpIssuer + "/oauth2/register",
+	Device:    mcpIssuer + "/oauth2/device_authorization",
+	Token:     mcpIssuer + "/oauth2/token",
+	Authorize: mcpIssuer + "/oauth2/authorize",
 }
 
-// MCPLogin performs WorkOS's OAuth device flow and stores only refresh credentials.
+// MCPLogin performs AuthKit's OAuth authorization-code flow and stores only refresh credentials.
 func MCPLogin(ctx context.Context, out io.Writer) error {
-	credentials, err := deviceLogin(ctx, out, workOSEndpoints)
+	credentials, err := authCodeLogin(ctx, out, workOSEndpoints)
 	if err != nil {
 		return redactError(err)
 	}
 	if err := keyring.Set(mcpKeychainService, mcpClientIDAccount, credentials.ClientID); err != nil {
 		return fmt.Errorf("store WorkOS MCP client ID in OS keychain: %w", err)
+	}
+	if err := keyring.Set(mcpKeychainService, mcpAccessAccount, credentials.AccessToken); err != nil {
+		return fmt.Errorf("store WorkOS MCP access credential in OS keychain: %w", err)
 	}
 	if err := keyring.Set(mcpKeychainService, mcpRefreshAccount, credentials.RefreshToken); err != nil {
 		_ = keyring.Delete(mcpKeychainService, mcpClientIDAccount)
@@ -138,10 +153,91 @@ func MCPLogin(ctx context.Context, out io.Writer) error {
 	return nil
 }
 
-func deviceLogin(ctx context.Context, out io.Writer, endpoints oauthEndpoints) (mcpCredentials, error) {
-	clientID, err := registerDeviceClient(ctx, endpoints.Register)
+func authCodeLogin(ctx context.Context, out io.Writer, endpoints oauthEndpoints) (mcpCredentials, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return mcpCredentials{}, err
+		return mcpCredentials{}, fmt.Errorf("listen for WorkOS OAuth callback: %w", err)
+	}
+	defer listener.Close()
+	redirectURI := "http://" + listener.Addr().String() + "/callback"
+	clientID := os.Getenv("WORKOS_MCP_CLIENT_ID")
+	if clientID == "" {
+		clientID, err = registerClient(ctx, endpoints.Register, redirectURI)
+		if err != nil {
+			return mcpCredentials{}, err
+		}
+	}
+	verifier := oauth2.GenerateVerifier()
+	config := &oauth2.Config{ClientID: clientID, Endpoint: oauth2.Endpoint{AuthURL: endpoints.Authorize, TokenURL: endpoints.Token, AuthStyle: oauth2.AuthStyleInParams}, RedirectURL: redirectURI, Scopes: []string{"openid", "profile", "email", "offline_access"}}
+	state := verifier
+	result := make(chan struct{ code, state, failure string }, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/callback" {
+			http.NotFound(w, r)
+			return
+		}
+		result <- struct{ code, state, failure string }{code: r.URL.Query().Get("code"), state: r.URL.Query().Get("state"), failure: r.URL.Query().Get("error")}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "Authorization complete. You can return to the terminal.")
+	})}
+	go func() { _ = server.Serve(listener) }()
+	defer func() { _ = server.Shutdown(context.Background()) }()
+	authURL := config.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("resource", ManagementMCPEndpoint))
+	fmt.Fprintf(out, "Open %s to authorize the WorkOS Management MCP provider.\n", authURL)
+	_ = openBrowser(authURL)
+	select {
+	case <-ctx.Done():
+		return mcpCredentials{}, ctx.Err()
+	case callback := <-result:
+		if callback.failure != "" {
+			return mcpCredentials{}, fmt.Errorf("WorkOS OAuth authorization failed: %s", callback.failure)
+		}
+		if callback.state != state || callback.code == "" {
+			return mcpCredentials{}, errors.New("WorkOS OAuth callback state validation failed")
+		}
+		token, err := config.Exchange(ctx, callback.code, oauth2.VerifierOption(verifier))
+		if err != nil {
+			return mcpCredentials{}, fmt.Errorf("exchange WorkOS OAuth authorization code: %w", err)
+		}
+		if token.RefreshToken == "" {
+			return mcpCredentials{}, errors.New("WorkOS OAuth response did not include a refresh token")
+		}
+		return mcpCredentials{ClientID: clientID, AccessToken: token.AccessToken, RefreshToken: token.RefreshToken}, nil
+	}
+}
+
+func registerClient(ctx context.Context, endpoint, redirectURI string) (string, error) {
+	body := strings.NewReader(fmt.Sprintf(`{"client_name":"OpenTofu WorkOS Provider","application_type":"native","redirect_uris":[%q],"grant_types":["authorization_code","refresh_token"],"token_endpoint_auth_method":"none"}`, redirectURI))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		ClientID string `json:"client_id"`
+	}
+	if err := decodeOAuthResponse(resp, &result); err != nil {
+		return "", fmt.Errorf("register WorkOS MCP client: %w", err)
+	}
+	if result.ClientID == "" {
+		return "", errors.New("register WorkOS MCP client: missing client_id")
+	}
+	return result.ClientID, nil
+}
+
+func deviceLogin(ctx context.Context, out io.Writer, endpoints oauthEndpoints) (mcpCredentials, error) {
+	clientID := os.Getenv("WORKOS_MCP_CLIENT_ID")
+	if clientID == "" {
+		var err error
+		clientID, err = registerDeviceClient(ctx, endpoints.Register)
+		if err != nil {
+			return mcpCredentials{}, err
+		}
 	}
 	form := url.Values{
 		"client_id": {clientID},
@@ -206,7 +302,7 @@ func deviceLogin(ctx context.Context, out io.Writer, endpoints oauthEndpoints) (
 }
 
 func registerDeviceClient(ctx context.Context, endpoint string) (string, error) {
-	body := strings.NewReader(`{"client_name":"OpenTofu WorkOS Provider","application_type":"native","grant_types":["urn:ietf:params:oauth:grant-type:device_code","refresh_token"],"token_endpoint_auth_method":"none"}`)
+	body := strings.NewReader(`{"client_name":"OpenTofu WorkOS Provider","application_type":"native","redirect_uris":["http://127.0.0.1"],"grant_types":["authorization_code","refresh_token"],"token_endpoint_auth_method":"none"}`)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
 	if err != nil {
 		return "", err
@@ -288,7 +384,7 @@ func MCPStatus(ctx context.Context, out io.Writer) error {
 }
 
 func MCPLogout(out io.Writer) error {
-	for _, account := range []string{mcpClientIDAccount, mcpRefreshAccount} {
+	for _, account := range []string{mcpClientIDAccount, mcpAccessAccount, mcpRefreshAccount} {
 		if err := keyring.Delete(mcpKeychainService, account); err != nil && !errors.Is(err, keyring.ErrNotFound) {
 			return fmt.Errorf("delete WorkOS MCP credential from OS keychain: %w", err)
 		}
