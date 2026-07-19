@@ -54,6 +54,8 @@ signs:
   - artifacts: checksum
     args:
       - "--batch"
+      - "--pinentry-mode"
+      - "loopback"
       - "--local-user"
       - "{{ .Env.GPG_FINGERPRINT }}"
       - "--output"
